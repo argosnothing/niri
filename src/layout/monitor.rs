@@ -426,6 +426,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn add_workspace_bottom(&mut self) {
         self.add_workspace_at(self.workspaces.len());
+        //self.ensure_empty_before_hidden();
     }
 
     pub fn activate_workspace(&mut self, idx: usize) {
@@ -545,6 +546,7 @@ impl<W: LayoutElement> Monitor<W> {
         if workspace_idx == self.workspaces.len() - 1 {
             self.add_workspace_bottom();
         }
+
         if self.options.layout.empty_workspace_above_first && workspace_idx == 0 {
             self.add_workspace_top();
             workspace_idx += 1;
@@ -593,6 +595,16 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
+    pub fn ensure_empty_before_hidden(&mut self) {
+        let first_hidden_idx = self.workspaces.iter().position(|ws| ws.hidden);
+
+        if let Some(hidden_idx) = first_hidden_idx {
+            if hidden_idx == 0 || self.workspaces[hidden_idx - 1].has_windows_or_name() {
+                self.add_workspace_at(hidden_idx);
+            }
+        }
+    }
+
     pub fn add_tile_to_column(
         &mut self,
         workspace_idx: usize,
@@ -622,14 +634,24 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn clean_up_workspaces(&mut self) {
         assert!(self.workspace_switch.is_none());
+        let last_hidden_idx = self.workspaces.iter().position(|ws| ws.hidden);
 
         let range_start = if self.options.layout.empty_workspace_above_first {
             1
         } else {
             0
         };
-        for idx in (range_start..self.workspaces.len() - 1).rev() {
+        let last_index_to_clean = if let Some(last_hidden_idx) = last_hidden_idx {
+            last_hidden_idx - 1
+        } else {
+            self.workspaces.len() - 1
+        };
+        for idx in (range_start..last_index_to_clean).rev() {
             if self.active_workspace_idx == idx {
+                continue;
+            }
+
+            if self.workspaces[idx].hidden {
                 continue;
             }
 
@@ -666,7 +688,8 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn remove_workspace_by_idx(&mut self, mut idx: usize) -> Workspace<W> {
-        if idx == self.workspaces.len() - 1 {
+        // Don't add a new workspace if we're removing a hidden one
+        if idx == self.workspaces.len() - 1 && !self.workspaces[idx].hidden {
             self.add_workspace_bottom();
         }
         if self.options.layout.empty_workspace_above_first && idx == 0 {
@@ -688,6 +711,22 @@ impl<W: LayoutElement> Monitor<W> {
         self.clean_up_workspaces();
 
         ws
+    }
+
+    pub fn move_workspace_to_hidden(&mut self, idx: usize) {
+        if idx == self.workspaces.len() - 1 {
+            return;
+        }
+        if self.options.layout.empty_workspace_above_first && idx == 0 {
+            self.add_workspace_top();
+        }
+
+        let mut ws = self.remove_workspace_by_idx(idx);
+        ws.set_output(None);
+        ws.original_idx = Some(idx);
+        ws.hidden = true;
+        self.workspaces.insert(self.workspaces.len(), ws);
+        self.ensure_empty_before_hidden();
     }
 
     pub fn insert_workspace(&mut self, mut ws: Workspace<W>, mut idx: usize, activate: bool) {
@@ -983,7 +1022,19 @@ impl<W: LayoutElement> Monitor<W> {
                 let new = current.ceil() - 1.;
                 new.clamp(0., (self.workspaces.len() - 1) as f64) as usize
             }
-            _ => self.active_workspace_idx.saturating_sub(1),
+            // If the workspace is hidden, we shouldn't switch to it.
+            _ => {
+                let mut new_idx = self.active_workspace_idx.saturating_sub(1);
+                while new_idx > 0 && self.workspaces[new_idx].hidden {
+                    new_idx = new_idx.saturating_sub(1);
+                }
+                // Don't move if there is only hidden above
+                if self.workspaces[new_idx].hidden {
+                    self.active_workspace_idx
+                } else {
+                    new_idx
+                }
+            }
         };
 
         self.activate_workspace(new_idx);
@@ -997,7 +1048,20 @@ impl<W: LayoutElement> Monitor<W> {
                 let new = current.floor() + 1.;
                 new.clamp(0., (self.workspaces.len() - 1) as f64) as usize
             }
-            _ => min(self.active_workspace_idx + 1, self.workspaces.len() - 1),
+            // If the workspace is hidden, we shouldn't switch to it.
+            // Instead we need to bump the workspace down
+            _ => {
+                let max = self.workspaces.len() - 1;
+                let mut new_idx = min(self.active_workspace_idx + 1, max);
+                while new_idx < max && self.workspaces[new_idx].hidden {
+                    new_idx += 1;
+                }
+                if new_idx > max || self.workspaces[new_idx].hidden {
+                    return;
+                }
+
+                new_idx
+            }
         };
 
         self.activate_workspace(new_idx);
@@ -1503,7 +1567,7 @@ impl<W: LayoutElement> Monitor<W> {
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter(), geo)
             // Cull out workspaces outside the output.
-            .filter(move |(_ws, geo)| geo.intersection(output_geo).is_some())
+            .filter(move |(ws, geo)| !ws.hidden && geo.intersection(output_geo).is_some())
     }
 
     pub fn workspaces_with_render_geo_idx(
@@ -1514,7 +1578,7 @@ impl<W: LayoutElement> Monitor<W> {
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter().enumerate(), geo)
             // Cull out workspaces outside the output.
-            .filter(move |(_ws, geo)| geo.intersection(output_geo).is_some())
+            .filter(move |(ws, geo)| !ws.1.hidden && geo.intersection(output_geo).is_some())
     }
 
     pub fn workspaces_with_render_geo_mut(
@@ -1526,7 +1590,7 @@ impl<W: LayoutElement> Monitor<W> {
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter_mut(), geo)
             // Cull out workspaces outside the output.
-            .filter(move |(_ws, geo)| !cull || geo.intersection(output_geo).is_some())
+            .filter(move |(ws, geo)| !ws.hidden && !cull || geo.intersection(output_geo).is_some())
     }
 
     pub fn workspace_under(

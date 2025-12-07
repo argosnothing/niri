@@ -279,6 +279,18 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
         }
         Request::Workspaces => {
             let state = ctx.event_stream_state.borrow();
+            let workspaces = state
+                .workspaces
+                .workspaces
+                .values()
+                .filter(|workspace| !workspace.is_hidden)
+                .cloned()
+                .collect();
+            Response::Workspaces(workspaces)
+        }
+
+        Request::WorkspacesWithHidden => {
+            let state = ctx.event_stream_state.borrow();
             let workspaces = state.workspaces.workspaces.values().cloned().collect();
             Response::Workspaces(workspaces)
         }
@@ -658,6 +670,7 @@ impl State {
                         is_urgent: ws.is_urgent(),
                         is_active: mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx),
                         is_focused: Some(id) == focused_ws_id,
+                        is_hidden: ws.hidden,
                         active_window_id: ws.active_window().map(|win| win.id().get()),
                     }
                 })
