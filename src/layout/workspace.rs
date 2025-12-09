@@ -123,21 +123,51 @@ impl OutputId {
 }
 
 static WORKSPACE_ID_COUNTER: IdCounter = IdCounter::new();
+static SPECIAL_WORKSPACE_ID_COUNTER: IdCounter = IdCounter::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WorkspaceId(u64);
+pub enum WorkspaceId {
+    NormalId(u64),
+    SpecialId(u64),
+}
+
+pub enum WorkspaceLayer {
+    Normal,
+    Special,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NormalId(u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpecialId(u64);
 
 impl WorkspaceId {
-    fn next() -> WorkspaceId {
-        WorkspaceId(WORKSPACE_ID_COUNTER.next())
+    fn next(self) -> WorkspaceId {
+        match self {
+            WorkspaceId::NormalId(_) => WorkspaceId::NormalId(WORKSPACE_ID_COUNTER.next()),
+            WorkspaceId::SpecialId(_) => WorkspaceId::SpecialId(SPECIAL_WORKSPACE_ID_COUNTER.next()),
+        }
+    }
+    fn new(layer_type: WorkspaceLayer) -> WorkspaceId {
+        //WorkspaceId(WORKSPACE_ID_COUNTER.next())
+        match layer_type {
+            WorkspaceLayer::Normal => WorkspaceId::NormalId(WORKSPACE_ID_COUNTER.next()),
+            WorkspaceLayer::Special => WorkspaceId::SpecialId(SPECIAL_WORKSPACE_ID_COUNTER.next()),
+        }
     }
 
     pub fn get(self) -> u64 {
-        self.0
+        match self {
+            WorkspaceId::NormalId(id) | WorkspaceId::SpecialId(id) => id,
+        }
     }
 
-    pub fn specific(id: u64) -> Self {
-        Self(id)
+    pub fn specific(self, id: u64) -> Self {
+        match self {
+            WorkspaceId::NormalId(_) => WorkspaceId::NormalId(id),
+            WorkspaceId::SpecialId(_) => WorkspaceId::SpecialId(id),
+        }
     }
 }
 
@@ -267,9 +297,22 @@ impl<W: LayoutElement> Workspace<W> {
             clock,
             base_options,
             options,
+            // On newly created workspaces we need to seed the enum with what kind of layer it's
+            // on, when calling next it will use self to determine what layer to increment it's id
+            // on. Workspaces themselves can never change layer.
+            id: config
+                .as_ref()
+                .map(|c| {
+                    WorkspaceId::new(if c.special {
+                        WorkspaceLayer::Special
+                    } else {
+                        WorkspaceLayer::Normal
+                    })
+                })
+                .unwrap_or(WorkspaceId::new(WorkspaceLayer::Normal)),
             name: config.map(|c| c.name.0),
             layout_config,
-            id: WorkspaceId::next(),
+
         }
     }
 
