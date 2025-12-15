@@ -44,6 +44,7 @@ use self::spatial_movement_grab::SpatialMovementGrab;
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_a11y::KbMonBlock;
 use crate::layout::scrolling::ScrollDirection;
+use crate::layout::workspace::WorkspaceId;
 use crate::layout::{ActivateWindow, LayoutElement as _};
 use crate::niri::{CastTarget, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
@@ -1318,11 +1319,16 @@ impl State {
                 reference,
                 focus,
             } => {
-                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = self
+                    .niri
+                    .layout
+                    .windows_with_hidden()
+                    .find(|(_, m)| m.id().get() == id);
                 let window = window.map(|(_, m)| m.window.clone());
                 if let Some(window) = window {
-                    if let Some((output, index)) =
-                        self.niri.find_output_and_workspace_index(reference)
+                    if let Some((output, index)) = self
+                        .niri
+                        .find_output_and_workspace_index_with_hidden(&reference)
                     {
                         let target_was_active = self
                             .niri
@@ -1336,7 +1342,7 @@ impl State {
                             ActivateWindow::No
                         };
 
-                        if let Some(output) = output {
+                        if let (Some(output), Some(index)) = (output, index) {
                             self.niri.layout.move_to_output(
                                 Some(&window),
                                 &output,
@@ -1354,9 +1360,21 @@ impl State {
                                 }
                             }
                         } else {
-                            self.niri
-                                .layout
-                                .move_to_workspace(Some(&window), index, activate);
+                            match (index, reference) {
+                                (Some(index), _) => {
+                                    self.niri.layout.move_to_workspace(
+                                        Some(&window),
+                                        index,
+                                        activate,
+                                    );
+                                }
+                                (None, niri_config::WorkspaceReference::Id(id)) => {
+                                    self.niri
+                                        .layout
+                                        .move_to_workspace_with_hidden(Some(&window), WorkspaceId::specific(id), activate)
+                                },
+                                (_, _) => {},
+                            }
 
                             // If we focused the target window.
                             let new_focus = self.niri.layout.focus();

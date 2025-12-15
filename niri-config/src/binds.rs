@@ -204,6 +204,7 @@ pub enum Action {
     SwapWindowLeft,
     SwapWindowRight,
     ToggleColumnTabbedDisplay,
+    ToggleWorkspaceVisibility(#[knuffel(argument, str)] String),
     SetColumnDisplay(#[knuffel(argument, str)] ColumnDisplay),
     CenterColumn,
     CenterWindow,

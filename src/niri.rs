@@ -3797,6 +3797,40 @@ impl Niri {
         Some((target_output.cloned(), target_workspace_index))
     }
 
+    pub fn find_output_and_workspace_index_with_hidden(
+        &self,
+        workspace_reference: &WorkspaceReference,
+    ) -> Option<(Option<Output>, Option<usize>)> {
+        let (target_workspace_index, target_workspace) = match workspace_reference {
+            WorkspaceReference::Index(index) => {
+                return Some((None, Some(index.saturating_sub(1) as usize)));
+            }
+            // In the case that the workspace is hidden,
+            // we should just return the usize as None to indicate we
+            // will not be using idx
+            WorkspaceReference::Name(name) => {
+                let (index, workspace) = self.layout.find_workspace_by_name(name)?;
+                if workspace.hidden {
+                    (None, workspace)
+                } else {
+                    (Some(index), workspace)
+                }
+            },
+            WorkspaceReference::Id(id) => {
+                let id = WorkspaceId::specific(*id);
+                let (index, workspace) = self.layout.find_workspace_by_id(id)?;
+                if workspace.hidden {
+                    (None, workspace)
+                } else {
+                    (Some(index), workspace)
+                }
+            }
+        };
+
+        let target_output = target_workspace.current_output();
+        Some((target_output.cloned(), target_workspace_index))
+    }
+
     pub fn find_window_by_id(&self, id: MappedId) -> Option<Window> {
         self.layout
             .windows()
