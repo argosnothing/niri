@@ -1369,11 +1369,13 @@ impl State {
                                     );
                                 }
                                 (None, niri_config::WorkspaceReference::Id(id)) => {
-                                    self.niri
-                                        .layout
-                                        .move_to_workspace_with_hidden(Some(&window), WorkspaceId::specific(id), activate)
-                                },
-                                (_, _) => {},
+                                    self.niri.layout.move_to_workspace_with_hidden(
+                                        Some(&window),
+                                        WorkspaceId::specific(id),
+                                        activate,
+                                    );
+                                }
+                                (_, _) => {}
                             }
 
                             // If we focused the target window.
