@@ -105,6 +105,9 @@ pub struct Workspace<W: LayoutElement> {
     /// Optional name of this workspace.
     pub(super) name: Option<String>,
 
+    /// The workspace needs to track its own status of being hidden or not.
+    pub hidden: bool,
+
     /// Layout config overrides for this workspace.
     layout_config: Option<niri_config::LayoutPart>,
 
@@ -267,6 +270,7 @@ impl<W: LayoutElement> Workspace<W> {
             clock,
             base_options,
             options,
+            hidden: config.as_ref().is_some_and(|c| c.hidden.is_some_and(|h| h)),
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
@@ -331,6 +335,7 @@ impl<W: LayoutElement> Workspace<W> {
             clock,
             base_options,
             options,
+            hidden: config.as_ref().is_some_and(|c| c.hidden.is_some_and(|h| h)),
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),

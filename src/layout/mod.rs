@@ -336,6 +336,7 @@ enum MonitorSet<W: LayoutElement> {
     NoOutputs {
         /// The workspaces.
         workspaces: Vec<Workspace<W>>,
+        hidden_workspaces: Vec<Workspace<W>>,
     },
 }
 
@@ -643,7 +644,7 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn with_options(clock: Clock, options: Options) -> Self {
         Self {
-            monitor_set: MonitorSet::NoOutputs { workspaces: vec![] },
+            monitor_set: MonitorSet::NoOutputs { workspaces: vec![], hidden_workspaces: vec![], },
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
@@ -659,16 +660,23 @@ impl<W: LayoutElement> Layout<W> {
     fn with_options_and_workspaces(clock: Clock, config: &Config, options: Options) -> Self {
         let opts = Rc::new(options);
 
-        let workspaces = config
+        // When building out workspaces when no outputs are set, we still need to track
+        // the hidden workspaces separately so we must pull them out as we construct the layout
+        let (workspaces, hidden_workspaces) = config
             .workspaces
             .iter()
-            .map(|ws| {
-                Workspace::new_with_config_no_outputs(Some(ws.clone()), clock.clone(), opts.clone())
-            })
-            .collect();
+            .fold((Vec::new(), Vec::new()), |(mut ws, mut hws), config_ws| {
+                let workspace = Workspace::new_with_config_no_outputs(Some(config_ws.clone()), clock.clone(), opts.clone());
+                if !config_ws.hidden.is_some_and(|h| h) {
+                    ws.push(workspace);
+                } else {
+                    hws.push(workspace);
+                }
+                (ws, hws)
+            });
 
         Self {
-            monitor_set: MonitorSet::NoOutputs { workspaces },
+            monitor_set: MonitorSet::NoOutputs { workspaces, hidden_workspaces },
             is_active: true,
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
@@ -693,6 +701,7 @@ impl<W: LayoutElement> Layout<W> {
                 let mut stopped_primary_ws_switch = false;
 
                 let mut workspaces = vec![];
+                let mut hidden_workspaces = vec![];
                 for i in (0..primary.workspaces.len()).rev() {
                     if primary.workspaces[i].original_output.matches(&output) {
                         let ws = primary.workspaces.remove(i);
@@ -732,6 +741,15 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
 
+                for i in (0..primary.hidden_workspaces.len()).rev() {
+                    if primary.hidden_workspaces[i].original_output.matches(&output) {
+                        let ws = primary.hidden_workspaces.remove(i);
+                        if ws.has_windows_or_name() {
+                            hidden_workspaces.push(ws);
+                        }
+                    }
+                }
+
                 // If we stopped a workspace switch, then we might need to clean up workspaces.
                 // Also if empty_workspace_above_first is set and there are only 2 workspaces left,
                 // both will be empty and one of them needs to be removed. clean_up_workspaces
@@ -751,6 +769,7 @@ impl<W: LayoutElement> Layout<W> {
                 let mut monitor = Monitor::new(
                     output,
                     workspaces,
+                    hidden_workspaces,
                     ws_id_to_activate,
                     self.clock.clone(),
                     self.options.clone(),
@@ -766,12 +785,13 @@ impl<W: LayoutElement> Layout<W> {
                     active_monitor_idx,
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, hidden_workspaces } => {
                 let ws_id_to_activate = self.last_active_workspace_id.remove(&output.name());
 
                 let mut monitor = Monitor::new(
                     output,
                     workspaces,
+                    hidden_workspaces,
                     ws_id_to_activate,
                     self.clock.clone(),
                     self.options.clone(),
@@ -807,7 +827,7 @@ impl<W: LayoutElement> Layout<W> {
                     monitor.workspaces[monitor.active_workspace_idx].id(),
                 );
 
-                let mut workspaces = monitor.into_workspaces();
+                let (mut workspaces, hidden_workspaces) = monitor.into_workspaces();
 
                 if monitors.is_empty() {
                     // Removed the last monitor.
@@ -817,7 +837,7 @@ impl<W: LayoutElement> Layout<W> {
                         ws.update_config(self.options.clone());
                     }
 
-                    MonitorSet::NoOutputs { workspaces }
+                    MonitorSet::NoOutputs { workspaces, hidden_workspaces }
                 } else {
                     if primary_idx >= idx {
                         // Update primary_idx to either still point at the same monitor, or at some
@@ -982,7 +1002,7 @@ impl<W: LayoutElement> Layout<W> {
 
                 Some(&mon.output)
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 let (ws_idx, target) = match target {
                     AddWindowTarget::Auto => {
                         if workspaces.is_empty() {
@@ -1210,9 +1230,18 @@ impl<W: LayoutElement> Layout<W> {
                     {
                         return Some((index, workspace));
                     }
+                    
+                    if let Some((index, workspace)) = mon
+                        .hidden_workspaces
+                        .iter()
+                        .enumerate()
+                        .find(|(_, w)| w.id() == id)
+                    {
+                        return Some((index, workspace));
+                    }
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, ..} => {
                 if let Some((index, workspace)) =
                     workspaces.iter().enumerate().find(|(_, w)| w.id() == id)
                 {
@@ -1237,9 +1266,20 @@ impl<W: LayoutElement> Layout<W> {
                     {
                         return Some((index, workspace));
                     }
+                    
+                    // If no non hidden workspace is found, try hidden ones. 
+                    if let Some((index, workspace)) =
+                        mon.hidden_workspaces.iter().enumerate().find(|(_, w)| {
+                            w.name
+                                .as_ref()
+                                .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+                        })
+                    {
+                        return Some((index, workspace));
+                    }
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 if let Some((index, workspace)) = workspaces.iter().enumerate().find(|(_, w)| {
                     w.name
                         .as_ref()
@@ -1252,6 +1292,103 @@ impl<W: LayoutElement> Layout<W> {
 
         None
     }
+
+    pub fn hide_workspace_by_name(&mut self, workspace_name: &str) {
+        match &mut self.monitor_set {
+            MonitorSet::Normal { ref mut monitors, .. } => {
+                for mon in monitors.iter_mut() {
+                    let index = mon.workspaces.iter().position(|w| {
+                        w.name
+                            .as_ref()
+                            .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+                    });
+                    
+                    if let Some(idx) = index {
+                        let output = mon.workspaces[idx].current_output().cloned();
+                        let mut workspace_to_hide = mon.remove_workspace_by_idx(idx);
+                        workspace_to_hide.hidden = true;
+                        workspace_to_hide.set_output(output);
+                        mon.hidden_workspaces.push(workspace_to_hide);
+                    }
+                }
+            }
+            MonitorSet::NoOutputs { workspaces, hidden_workspaces } => {
+                let index = workspaces.iter().position(|w| {
+                    w.name
+                        .as_ref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+                });
+                
+                if let Some(idx) = index {
+                    let output = workspaces[idx].current_output().cloned();
+                    let mut workspace_to_hide = workspaces.remove(idx);
+                    workspace_to_hide.hidden = true;
+                    workspace_to_hide.set_output(output);
+                    hidden_workspaces.push(workspace_to_hide);
+                }
+            }
+        }
+    }
+
+    pub fn unhide_workspace_by_name(&mut self, workspace_name: &str) {
+        match &mut self.monitor_set {
+            MonitorSet::Normal { ref mut monitors, .. } => {
+                for mon in monitors.iter_mut() {
+                    let index = mon.hidden_workspaces.iter().position(|w| {
+                        w.name
+                            .as_ref()
+                            .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+                    });
+                    
+                    if let Some(idx) = index {
+                        let mut workspace_to_unhide = mon.hidden_workspaces.remove(idx);
+                        workspace_to_unhide.hidden = false;
+                        // For simplicity, lets just append to the monitor vec as if we created
+                        // a workspace at the end.
+                        mon.insert_workspace(workspace_to_unhide, mon.workspaces.len(), false);
+                    }
+                }
+            }
+            MonitorSet::NoOutputs { workspaces, hidden_workspaces } => {
+                let index = hidden_workspaces.iter().position(|w| {
+                    w.name
+                        .as_ref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+                });
+                
+                if let Some(idx) = index {
+                    let mut workspace_to_unhide = hidden_workspaces.remove(idx);
+                    workspace_to_unhide.hidden = false;
+                    workspaces.push(workspace_to_unhide);
+                }
+            }
+        }
+    }
+
+    pub fn get_with_hidden_workspace_by_name(&mut self, workspace_name: &str) -> Option<&Workspace<W>> {
+        match &mut self.monitor_set {
+            MonitorSet::Normal { ref mut monitors, .. } => {
+                for mon in monitors.iter_mut() {
+                    if let Some(ws) = mon.workspaces.iter().chain(mon.hidden_workspaces.iter()).find(|w| {
+                        w.name
+                            .as_ref()
+                            .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+                    }) {
+                        return Some(ws);
+                    }
+                }
+                None
+            }
+            MonitorSet::NoOutputs { workspaces, hidden_workspaces } => {
+                workspaces.iter().chain(hidden_workspaces.iter()).find(|w| {
+                    w.name
+                        .as_ref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+                })
+            }
+        }
+    }
+
 
     pub fn find_workspace_by_ref(
         &mut self,
@@ -1294,7 +1431,7 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 for (idx, ws) in workspaces.iter_mut().enumerate() {
                     if ws.id() == id {
                         ws.unname();
@@ -1328,7 +1465,7 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
                     if let Some(window) = ws.find_wl_surface(wl_surface) {
                         return Some((window, None));
@@ -1360,7 +1497,7 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
                     if let Some(window) = ws.find_wl_surface_mut(wl_surface) {
                         return Some((window, None));
@@ -1634,8 +1771,37 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
+                    for (tile, layout) in ws.tiles_with_ipc_layouts() {
+                        f(tile.window(), None, Some(ws.id()), layout);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn with_windows_with_hidden(
+        &self,
+        mut f: impl FnMut(&W, Option<&Output>, Option<WorkspaceId>, WindowLayout),
+    ) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
+            let layout = move_.tile.ipc_layout_template();
+            f(move_.tile.window(), Some(&move_.output), None, layout);
+        }
+
+        match &self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => {
+                for mon in monitors {
+                    for ws in mon.workspaces.iter().chain(mon.hidden_workspaces.iter()) {
+                        for (tile, layout) in ws.tiles_with_ipc_layouts() {
+                            f(tile.window(), Some(&mon.output), Some(ws.id()), layout);
+                        }
+                    }
+                }
+            }
+            MonitorSet::NoOutputs { workspaces, hidden_workspaces } => {
+                for ws in workspaces.iter().chain(hidden_workspaces.iter()) {
                     for (tile, layout) in ws.tiles_with_ipc_layouts() {
                         f(tile.window(), None, Some(ws.id()), layout);
                     }
@@ -1659,7 +1825,7 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
                     for win in ws.windows_mut() {
                         f(win, None);
@@ -2097,6 +2263,37 @@ impl<W: LayoutElement> Layout<W> {
         monitor.move_to_workspace(window, idx, activate);
     }
 
+    pub fn move_to_workspace_with_hidden(
+        &mut self,
+        window: Option<&W::Id>,
+        target_id: WorkspaceId,
+        activate: ActivateWindow,
+    ) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
+            if window.is_none() || window == Some(move_.tile.window().id()) {
+                return;
+            }
+        }
+
+        let monitor = if let Some(window) = window {
+            match &mut self.monitor_set {
+                MonitorSet::Normal { monitors, .. } => monitors
+                    .iter_mut()
+                    .find(|mon| mon.has_window(window) || mon.hidden_workspaces.iter().any(|ws| ws.has_window(window)))
+                    .unwrap(),
+                MonitorSet::NoOutputs { .. } => {
+                    return;
+                }
+            }
+        } else {
+            let Some(monitor) = self.active_monitor() else {
+                return;
+            };
+            monitor
+        };
+        monitor.move_to_workspace_with_hidden(window, target_id, activate);
+    }
+
     pub fn move_column_to_workspace_up(&mut self, activate: bool) {
         let Some(monitor) = self.active_monitor() else {
             return;
@@ -2402,7 +2599,7 @@ impl<W: LayoutElement> Layout<W> {
                 primary_idx,
                 active_monitor_idx,
             } => (monitors, primary_idx, active_monitor_idx),
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 for workspace in workspaces {
                     assert!(
                         workspace.has_windows_or_name(),
@@ -2873,7 +3070,7 @@ impl<W: LayoutElement> Layout<W> {
                 );
                 mon.insert_workspace(ws, 0, false);
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 let ws =
                     Workspace::new_with_config_no_outputs(Some(ws_config.clone()), clock, options);
                 workspaces.insert(0, ws);
@@ -2912,7 +3109,7 @@ impl<W: LayoutElement> Layout<W> {
                     mon.update_config(options.clone());
                 }
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 for ws in workspaces {
                     ws.update_config(options.clone());
                 }
@@ -4842,8 +5039,78 @@ impl<W: LayoutElement> Layout<W> {
                 iter_normal = Some(it);
                 iter_no_outputs = None;
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 let it = workspaces
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, ws)| (None, idx, ws));
+
+                iter_normal = None;
+                iter_no_outputs = Some(it);
+            }
+        }
+
+        let iter_normal = iter_normal.into_iter().flatten();
+        let iter_no_outputs = iter_no_outputs.into_iter().flatten();
+        iter_normal.chain(iter_no_outputs)
+    }
+
+    pub fn workspaces_with_hidden(
+        &self,
+    ) -> impl Iterator<Item = (Option<&Monitor<W>>, usize, &Workspace<W>)> + '_ {
+        let iter_normal;
+        let iter_no_outputs;
+
+        match &self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => {
+                let it = monitors.iter().flat_map(|mon| {
+                    mon.workspaces
+                        .iter()
+                        .chain(mon.hidden_workspaces.iter())
+                        .enumerate()
+                        .map(move |(idx, ws)| (Some(mon), idx, ws))
+                });
+
+                iter_normal = Some(it);
+                iter_no_outputs = None;
+            }
+            MonitorSet::NoOutputs { workspaces, hidden_workspaces } => {
+                let it = workspaces
+                    .iter()
+                    .chain(hidden_workspaces.iter())
+                    .enumerate()
+                    .map(|(idx, ws)| (None, idx, ws));
+
+                iter_normal = None;
+                iter_no_outputs = Some(it);
+            }
+        }
+
+        let iter_normal = iter_normal.into_iter().flatten();
+        let iter_no_outputs = iter_no_outputs.into_iter().flatten();
+        iter_normal.chain(iter_no_outputs)
+    }
+
+    pub fn hidden_workspaces(
+        &self,
+    ) -> impl Iterator<Item = (Option<&Monitor<W>>, usize, &Workspace<W>)> + '_ {
+        let iter_normal;
+        let iter_no_outputs;
+
+        match &self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => {
+                let it = monitors.iter().flat_map(|mon| {
+                    mon.hidden_workspaces
+                        .iter()
+                        .enumerate()
+                        .map(move |(idx, ws)| (Some(mon), idx, ws))
+                });
+
+                iter_normal = Some(it);
+                iter_no_outputs = None;
+            }
+            MonitorSet::NoOutputs { workspaces: _workspaces, hidden_workspaces } => {
+                let it = hidden_workspaces
                     .iter()
                     .enumerate()
                     .map(|(idx, ws)| (None, idx, ws));
@@ -4871,7 +5138,7 @@ impl<W: LayoutElement> Layout<W> {
                 iter_normal = Some(it);
                 iter_no_outputs = None;
             }
-            MonitorSet::NoOutputs { workspaces } => {
+            MonitorSet::NoOutputs { workspaces, .. } => {
                 let it = workspaces.iter_mut();
 
                 iter_normal = None;
@@ -4899,6 +5166,21 @@ impl<W: LayoutElement> Layout<W> {
         moving_window.chain(rest)
     }
 
+    pub fn windows_with_hidden(&self) -> impl Iterator<Item = (Option<&Monitor<W>>, &W)> {
+        let moving_window = self
+            .interactive_move
+            .as_ref()
+            .and_then(|x| x.moving())
+            .map(|move_| (self.monitor_for_output(&move_.output), move_.tile.window()))
+            .into_iter();
+
+        let rest = self
+            .workspaces_with_hidden()
+            .flat_map(|(mon, _, ws)| ws.windows().map(move |win| (mon, win)));
+
+        moving_window.chain(rest)
+    }
+
     pub fn has_window(&self, window: &W::Id) -> bool {
         self.windows().any(|(_, win)| win.id() == window)
     }
@@ -4910,7 +5192,7 @@ impl<W: LayoutElement> Layout<W> {
 
 impl<W: LayoutElement> Default for MonitorSet<W> {
     fn default() -> Self {
-        Self::NoOutputs { workspaces: vec![] }
+        Self::NoOutputs { workspaces: vec![], hidden_workspaces: vec![], }
     }
 }
 

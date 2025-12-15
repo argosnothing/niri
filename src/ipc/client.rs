@@ -42,7 +42,9 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
             action: action.clone(),
         },
         Msg::Workspaces => Request::Workspaces,
+        Msg::WorkspacesWithHidden => Request::WorkspacesWithHidden,
         Msg::Windows => Request::Windows,
+        Msg::WindowsWithHidden => Request::WindowsWithHidden,
         Msg::Layers => Request::Layers,
         Msg::KeyboardLayouts => Request::KeyboardLayouts,
         Msg::EventStream => Request::EventStream,
@@ -183,6 +185,25 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::Windows => {
             let Response::Windows(mut windows) = response else {
                 bail!("unexpected response: expected Windows, got {response:?}");
+            };
+
+            if json {
+                let windows =
+                    serde_json::to_string(&windows).context("error formatting response")?;
+                println!("{windows}");
+                return Ok(());
+            }
+
+            windows.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+
+            for window in windows {
+                print_window(&window);
+                println!();
+            }
+        }
+        Msg::WindowsWithHidden => {
+            let Response::WindowsWithHidden(mut windows) = response else {
+                bail!("unexpected response: expected WindowsWithHidden, got {response:?}");
             };
 
             if json {
@@ -341,6 +362,54 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::Workspaces => {
             let Response::Workspaces(mut response) = response else {
                 bail!("unexpected response: expected Workspaces, got {response:?}");
+            };
+
+            if json {
+                let response =
+                    serde_json::to_string(&response).context("error formatting response")?;
+                println!("{response}");
+                return Ok(());
+            }
+
+            if response.is_empty() {
+                println!("No workspaces.");
+                return Ok(());
+            }
+
+            response.sort_by_key(|ws| ws.idx);
+            response.sort_by(|a, b| a.output.cmp(&b.output));
+
+            let mut current_output = if let Some(output) = response[0].output.as_deref() {
+                println!("Output \"{output}\":");
+                Some(output)
+            } else {
+                println!("No output:");
+                None
+            };
+
+            for ws in &response {
+                if ws.output.as_deref() != current_output {
+                    let output = ws.output.as_deref().context(
+                        "invalid response: workspace with no output \
+                         following a workspace with an output",
+                    )?;
+                    current_output = Some(output);
+                    println!("\nOutput \"{output}\":");
+                }
+
+                let is_active = if ws.is_active { " * " } else { "   " };
+                let idx = ws.idx;
+                let name = if let Some(name) = ws.name.as_deref() {
+                    format!(" \"{name}\"")
+                } else {
+                    String::new()
+                };
+                println!("{is_active}{idx}{name}");
+            }
+        }
+        Msg::WorkspacesWithHidden => {
+            let Response::WorkspacesWithHidden(mut response) = response else {
+                bail!("unexpected response: expected WorkspacesWithHidden, got {response:?}");
             };
 
             if json {

@@ -63,6 +63,8 @@ pub struct Monitor<W: LayoutElement> {
     working_area: Rectangle<f64, Logical>,
     // Must always contain at least one.
     pub(super) workspaces: Vec<Workspace<W>>,
+    // Any workspace that we are currently hiding.
+    pub(super) hidden_workspaces: Vec<Workspace<W>>,
     /// Index of the currently active workspace.
     pub(super) active_workspace_idx: usize,
     /// ID of the previously active workspace.
@@ -290,6 +292,7 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn new(
         output: Output,
         mut workspaces: Vec<Workspace<W>>,
+        mut hidden_workspaces: Vec<Workspace<W>>,
         ws_id_to_activate: Option<WorkspaceId>,
         clock: Clock,
         base_options: Rc<Options>,
@@ -316,6 +319,13 @@ impl<W: LayoutElement> Monitor<W> {
             }
         }
 
+        // If applicable, hidden workspaces also need outputs and configs set.
+        for (_, ws) in hidden_workspaces.iter_mut().enumerate() {
+            assert!(ws.has_windows_or_name());
+            ws.set_output(Some(output.clone()));
+            ws.update_config(options.clone());
+        }
+
         if options.layout.empty_workspace_above_first && !workspaces.is_empty() {
             let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
             workspaces.insert(0, ws);
@@ -331,6 +341,7 @@ impl<W: LayoutElement> Monitor<W> {
             scale,
             view_size,
             working_area,
+            hidden_workspaces,
             workspaces,
             active_workspace_idx,
             previous_workspace_id: None,
@@ -347,14 +358,18 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
-    pub fn into_workspaces(mut self) -> Vec<Workspace<W>> {
+    pub fn into_workspaces(mut self) -> (Vec<Workspace<W>>, Vec<Workspace<W>>) {
         self.workspaces.retain(|ws| ws.has_windows_or_name());
 
         for ws in &mut self.workspaces {
             ws.set_output(None);
         }
 
-        self.workspaces
+        for ws in &mut self.hidden_workspaces {
+            ws.set_output(None);
+        }
+
+        (self.workspaces, self.hidden_workspaces)
     }
 
     pub fn output(&self) -> &Output {
@@ -904,6 +919,104 @@ impl<W: LayoutElement> Monitor<W> {
 
         if self.workspace_switch.is_none() {
             self.clean_up_workspaces();
+        }
+    }
+
+    pub fn move_to_workspace_with_hidden(
+        &mut self,
+        window: Option<&W::Id>,
+        target_id: WorkspaceId,
+        activate: ActivateWindow,
+    ) {
+        let source_workspace_idx = if let Some(window) = window {
+            if let Some(idx) = self.workspaces.iter().position(|ws| ws.has_window(window)) {
+                Some(idx)
+            } else {
+                self.hidden_workspaces.iter().position(|ws| ws.has_window(window))
+            }
+        } else {
+            Some(self.active_workspace_idx)
+        };
+
+        let Some(source_idx) = source_workspace_idx else {
+            return;
+        };
+
+        let activate = activate.map_smart(|| {
+            window.map_or(true, |win| {
+                self.active_window().map(|win| win.id()) == Some(win)
+            })
+        });
+
+        let workspace = if source_idx < self.workspaces.len() {
+            &mut self.workspaces[source_idx]
+        } else {
+            &mut self.hidden_workspaces[source_idx - self.workspaces.len()]
+        };
+
+        let transaction = Transaction::new();
+        let removed = if let Some(window) = window {
+            workspace.remove_tile(window, transaction)
+        } else if let Some(removed) = workspace.remove_active_tile(transaction) {
+            removed
+        } else {
+            return;
+        };
+
+        self.add_tile_with_hidden(
+            removed.tile,
+            target_id,
+            if activate {
+                ActivateWindow::Yes
+            } else {
+                ActivateWindow::No
+            },
+            true,
+            removed.width,
+            removed.is_full_width,
+            removed.is_floating,
+        );
+
+        if self.workspace_switch.is_none() {
+            self.clean_up_workspaces();
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_tile_with_hidden(
+        &mut self,
+        tile: Tile<W>,
+        target_workspace_id: WorkspaceId,
+        activate: ActivateWindow,
+        allow_to_activate_workspace: bool,
+        width: ColumnWidth,
+        is_full_width: bool,
+        is_floating: bool,
+    ) {
+        let workspace_idx = if let Some(idx) = self.workspaces.iter().position(|ws| ws.id() == target_workspace_id) {
+            Some(idx)
+        } else {
+            self.hidden_workspaces.iter().position(|ws| ws.id() == target_workspace_id)
+        };
+
+        let Some(workspace_idx) = workspace_idx else {
+            return;
+        };
+
+        let workspace = if workspace_idx < self.workspaces.len() {
+            &mut self.workspaces[workspace_idx]
+        } else {
+            &mut self.hidden_workspaces[workspace_idx - self.workspaces.len()]
+        };
+
+        workspace.add_tile(tile, WorkspaceAddWindowTarget::Auto, activate, width, is_full_width, is_floating);
+
+        if workspace.name().is_none() {
+            workspace.original_output = OutputId::new(&self.output);
+        }
+
+        if workspace_idx < self.workspaces.len() && allow_to_activate_workspace && activate.map_smart(|| false) {
+            self.activate_workspace(workspace_idx);
         }
     }
 

@@ -282,10 +282,63 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let workspaces = state.workspaces.workspaces.values().cloned().collect();
             Response::Workspaces(workspaces)
         }
+        Request::WorkspacesWithHidden => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let layout = &state.niri.layout;
+                let focused_ws_id = layout.active_workspace().map(|ws| ws.id().get());
+                
+                let workspaces = layout
+                    .workspaces_with_hidden()
+                    .map(|(mon, ws_idx, ws)| {
+                        let id = ws.id().get();
+                        let is_active = if let Some(mon) = mon {
+                            !ws.hidden && mon.active_workspace_idx() == ws_idx
+                        } else {
+                            false
+                        };
+                        Workspace {
+                            id,
+                            idx: u8::try_from(ws_idx + 1).unwrap_or(u8::MAX),
+                            name: ws.name().cloned(),
+                            output: mon.map(|mon| mon.output_name().clone()),
+                            is_urgent: ws.is_urgent(),
+                            is_active,
+                            is_focused: Some(id) == focused_ws_id,
+                            active_window_id: ws.active_window().map(|win| win.id().get()),
+                        }
+                    })
+                    .collect();
+                
+                let _ = tx.send_blocking(workspaces);
+            });
+            
+            let result = rx.recv().await;
+            let workspaces = result.map_err(|_| String::from("error getting workspaces info"))?;
+            Response::WorkspacesWithHidden(workspaces)
+        }
         Request::Windows => {
             let state = ctx.event_stream_state.borrow();
             let windows = state.windows.windows.values().cloned().collect();
             Response::Windows(windows)
+        }
+        Request::WindowsWithHidden => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let layout = &state.niri.layout;
+                let mut windows = Vec::new();
+                
+                layout.with_windows_with_hidden(|mapped, _output, ws_id, window_layout| {
+                    let window = make_ipc_window(mapped, ws_id, window_layout);
+                    windows.push(window);
+                });
+                
+                let _ = tx.send_blocking(windows);
+            });
+            
+            let result = rx.recv().await;
+            let windows = result.map_err(|_| String::from("error getting windows info"))?;
+            Response::WindowsWithHidden(windows)
         }
         Request::Layers => {
             let (tx, rx) = async_channel::bounded(1);

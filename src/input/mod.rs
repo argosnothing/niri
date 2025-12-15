@@ -1370,6 +1370,15 @@ impl State {
                     }
                 }
             }
+            Action::ToggleWorkspaceVisibility(name) => {
+                if let Some(workspace) = self.niri.layout.get_with_hidden_workspace_by_name(&name) {
+                    if workspace.hidden {
+                        self.niri.layout.unhide_workspace_by_name(&name);
+                    } else {
+                        self.niri.layout.hide_workspace_by_name(&name);
+                    }
+                }
+            }
             Action::MoveColumnToWorkspaceDown(focus) => {
                 self.niri.layout.move_column_to_workspace_down(focus);
                 self.maybe_warp_cursor_to_focus();

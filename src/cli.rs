@@ -65,8 +65,12 @@ pub enum Msg {
     Outputs,
     /// List workspaces.
     Workspaces,
+    /// List workspaces, with hidden.
+    WorkspacesWithHidden,
     /// List open windows.
     Windows,
+    /// List open windows, including hidden workspace windows.
+    WindowsWithHidden,
     /// List open layer-shell surfaces.
     Layers,
     /// Get the configured keyboard layouts.

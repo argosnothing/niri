@@ -71,8 +71,12 @@ pub enum Request {
     Outputs,
     /// Request information about workspaces.
     Workspaces,
+    /// Request information about workspaces, including hidden.
+    WorkspacesWithHidden,
     /// Request information about open windows.
     Windows,
+    /// Request information about open windows, including hidden workspace windows.
+    WindowsWithHidden,
     /// Request information about layer-shell surfaces.
     Layers,
     /// Request information about the configured keyboard layouts.
@@ -143,8 +147,12 @@ pub enum Response {
     Outputs(HashMap<String, Output>),
     /// Information about workspaces.
     Workspaces(Vec<Workspace>),
+    /// Information about workspaces, including hidden.
+    WorkspacesWithHidden(Vec<Workspace>),
     /// Information about open windows.
     Windows(Vec<Window>),
+    /// Information about open windows, including hidden workspace windows.
+    WindowsWithHidden(Vec<Window>),
     /// Information about layer-shell surfaces.
     Layers(Vec<LayerSurface>),
     /// Information about the keyboard layout.
