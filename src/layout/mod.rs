@@ -904,6 +904,7 @@ impl<W: LayoutElement> Layout<W> {
         is_full_width: bool,
         is_floating: bool,
         activate: ActivateWindow,
+        force_unhide_workspace: bool,
     ) -> Option<&Output> {
         let scrolling_height = height.map(SizeChange::from);
         let id = window.id().clone();
@@ -983,6 +984,7 @@ impl<W: LayoutElement> Layout<W> {
                     scrolling_width,
                     is_full_width,
                     is_floating,
+                    force_unhide_workspace,
                 );
 
                 if activate.map_smart(|| false) {
@@ -3341,6 +3343,7 @@ impl<W: LayoutElement> Layout<W> {
                 removed.width,
                 removed.is_full_width,
                 removed.is_floating,
+                false,
             );
             if activate.map_smart(|| false) {
                 *active_monitor_idx = new_idx;
@@ -4220,6 +4223,7 @@ impl<W: LayoutElement> Layout<W> {
                             move_.width,
                             move_.is_full_width,
                             false,
+                            false,
                         );
                     }
                     InsertPosition::InColumn(column_idx, tile_idx) => {
@@ -4276,6 +4280,7 @@ impl<W: LayoutElement> Layout<W> {
                             move_.width,
                             move_.is_full_width,
                             true,
+                            false,
                         );
                     }
                 }
