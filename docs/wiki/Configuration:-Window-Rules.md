@@ -404,6 +404,10 @@ window-rule {
 }
 ```
 
+<sup>Since: XX.XX</sup>
+
+windows with `open-on-workspace` configured to a currently hidden workspace will have their windows silently spawn in the hidden workspace. 
+
 #### `open-maximized`
 
 Make the window open as a maximized column.

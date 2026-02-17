@@ -52,6 +52,11 @@ Explicitly moving a named workspace to a different monitor will still update its
 
 You can customize layout settings for named workspaces with a `layout {}` block:
 
+<sup>Since: XX.XX</sup>
+
+You can set a workspace to hidden through `hidden true`. These hidden workspaces will not be visible unless you explicitly unhide them.
+
+
 ```kdl
 workspace "aesthetic" {
     // Layout config overrides just for this named workspace.
