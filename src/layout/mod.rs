@@ -700,6 +700,27 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    pub fn toggle_workspace_visibility(&mut self, workspace_name: String) {
+        let Some(monitor) = self.monitor_for_workspace_mut(&workspace_name) else {
+            return;
+        };
+        let Some(ws_idx) = monitor.find_named_workspace_index(&workspace_name) else {
+            return;
+        };
+
+        let is_hidden = monitor.workspaces[ws_idx].hidden;
+
+        if is_hidden {
+            let Some(ws) = monitor.find_named_workspace(&workspace_name) else {
+                return;
+            };
+            monitor.unhide_workspace_by_id(ws.id(), false);
+            monitor.clean_up_workspaces();
+        } else {
+            monitor.hide_workspace_by_idx(ws_idx);
+        }
+    }
+
     pub fn add_output(&mut self, output: Output, layout_config: Option<LayoutPart>) {
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
@@ -902,6 +923,7 @@ impl<W: LayoutElement> Layout<W> {
         is_full_width: bool,
         is_floating: bool,
         activate: ActivateWindow,
+        force_unhide_workspace: bool,
     ) -> Option<&Output> {
         let scrolling_height = height.map(SizeChange::from);
         let id = window.id().clone();
@@ -981,6 +1003,7 @@ impl<W: LayoutElement> Layout<W> {
                     scrolling_width,
                     is_full_width,
                     is_floating,
+                    force_unhide_workspace,
                 );
 
                 if activate.map_smart(|| false) {
@@ -1506,7 +1529,7 @@ impl<W: LayoutElement> Layout<W> {
                         Some(WorkspaceSwitch::Gesture(gesture))
                             if gesture.current_idx.floor() == workspace_idx as f64
                                 || gesture.current_idx.ceil() == workspace_idx as f64 => {}
-                        _ => mon.switch_workspace(workspace_idx),
+                        _ => mon.switch_workspace(workspace_idx, false),
                     }
 
                     return;
@@ -1542,7 +1565,7 @@ impl<W: LayoutElement> Layout<W> {
                         Some(WorkspaceSwitch::Gesture(gesture))
                             if gesture.current_idx.floor() == workspace_idx as f64
                                 || gesture.current_idx.ceil() == workspace_idx as f64 => {}
-                        _ => mon.switch_workspace(workspace_idx),
+                        _ => mon.switch_workspace(workspace_idx, false),
                     }
 
                     return;
@@ -1744,6 +1767,16 @@ impl<W: LayoutElement> Layout<W> {
 
     pub fn monitor_for_workspace(&self, workspace_name: &str) -> Option<&Monitor<W>> {
         self.monitors().find(|monitor| {
+            monitor.workspaces.iter().any(|ws| {
+                ws.name
+                    .as_ref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(workspace_name))
+            })
+        })
+    }
+
+    pub fn monitor_for_workspace_mut(&mut self, workspace_name: &str) -> Option<&mut Monitor<W>> {
+        self.monitors_mut().find(|monitor| {
             monitor.workspaces.iter().any(|ws| {
                 ws.name
                     .as_ref()
@@ -2151,11 +2184,11 @@ impl<W: LayoutElement> Layout<W> {
         monitor.switch_workspace_down();
     }
 
-    pub fn switch_workspace(&mut self, idx: usize) {
+    pub fn switch_workspace(&mut self, idx: usize, force_unhide: bool) {
         let Some(monitor) = self.active_monitor() else {
             return;
         };
-        monitor.switch_workspace(idx);
+        monitor.switch_workspace(idx, force_unhide);
     }
 
     pub fn switch_workspace_auto_back_and_forth(&mut self, idx: usize) {
@@ -2904,7 +2937,11 @@ impl<W: LayoutElement> Layout<W> {
                     clock,
                     options,
                 );
-                mon.insert_workspace(ws, 0, false);
+                if ws.hidden {
+                    mon.insert_hidden_workspace(ws, 0);
+                } else {
+                    mon.insert_workspace(ws, 0, false);
+                }
             }
             MonitorSet::NoOutputs { workspaces } => {
                 let ws =
@@ -3339,6 +3376,7 @@ impl<W: LayoutElement> Layout<W> {
                 removed.width,
                 removed.is_full_width,
                 removed.is_floating,
+                false,
             );
             if activate.map_smart(|| false) {
                 *active_monitor_idx = new_idx;
@@ -4218,6 +4256,7 @@ impl<W: LayoutElement> Layout<W> {
                             move_.width,
                             move_.is_full_width,
                             false,
+                            false,
                         );
                     }
                     InsertPosition::InColumn(column_idx, tile_idx) => {
@@ -4274,6 +4313,7 @@ impl<W: LayoutElement> Layout<W> {
                             move_.width,
                             move_.is_full_width,
                             true,
+                            false,
                         );
                     }
                 }
