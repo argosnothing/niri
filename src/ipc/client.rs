@@ -194,7 +194,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            windows.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+            windows.sort_unstable_by_key(|a| a.id);
 
             for window in windows {
                 print_window(&window);
@@ -221,7 +221,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
 
             let print = |surface: &niri_ipc::LayerSurface| {
                 println!("    Surface:");
-                println!("      Namespace: \"{}\"", &surface.namespace);
+                println!("      Namespace: \"{}\"", surface.namespace);
 
                 let interactivity = match surface.keyboard_interactivity {
                     niri_ipc::LayerSurfaceKeyboardInteractivity::None => "none",
@@ -620,6 +620,7 @@ fn print_output(output: Output) -> anyhow::Result<()> {
         vrr_supported,
         vrr_enabled,
         logical,
+        max_bpc,
     } = output;
 
     let serial = serial.as_deref().unwrap_or("Unknown");
@@ -701,6 +702,10 @@ fn print_output(output: Output) -> anyhow::Result<()> {
             Transform::Flipped270 => "270° counter-clockwise, flipped horizontally",
         };
         println!("  Transform: {transform}");
+    }
+
+    if let Some(max_bpc) = max_bpc {
+        println!("  Max bits per channel: {max_bpc}");
     }
 
     println!("  Available modes:");
