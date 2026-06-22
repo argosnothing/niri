@@ -1703,7 +1703,8 @@ impl<W: LayoutElement> Layout<W> {
                 for mon in monitors {
                     for ws in &mon.workspaces {
                         for (tile, layout) in ws.tiles_with_ipc_layouts() {
-                            f(tile.window(), Some(&mon.output), Some(ws.id()), layout);
+                            let output = if ws.hidden { None } else { Some(&mon.output) };
+                            f(tile.window(), output, Some(ws.id()), layout);
                         }
                     }
                 }
