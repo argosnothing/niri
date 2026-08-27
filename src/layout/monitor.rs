@@ -565,6 +565,16 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn add_column(&mut self, mut workspace_idx: usize, column: Column<W>, activate: bool) {
+        // A hidden workspace must never become the active one, since it isn't
+        // rendered. Unhide it first, marking it to hide again on switching away
+        // (the same force-unhide path add_tile uses).
+        if activate && self.workspaces[workspace_idx].hidden {
+            let ws_id = self.workspaces[workspace_idx].id();
+            if let Some(idx) = self.unhide_workspace_by_id(ws_id, true) {
+                workspace_idx = idx;
+            }
+        }
+
         let first_hidden_idx = self.workspaces.iter().position(|ws| ws.hidden);
         let is_last_visible = first_hidden_idx
             .map(|hidden_idx| workspace_idx + 1 == hidden_idx)
@@ -700,7 +710,7 @@ impl<W: LayoutElement> Monitor<W> {
             0
         };
         let last_index_to_clean = if let Some(last_hidden_idx) = last_hidden_idx {
-            last_hidden_idx - 1
+            last_hidden_idx.saturating_sub(1)
         } else {
             self.workspaces.len() - 1
         };
@@ -802,7 +812,14 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn hide_workspace_by_idx(&mut self, mut idx: usize) {
-        if idx == self.workspaces.len() - 1 {
+        // Never hide the last visible workspace: the visible region must keep
+        // its trailing empty workspace, which also guards the hidden block.
+        let visible_end = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap_or(self.workspaces.len());
+        if idx + 1 >= visible_end {
             return;
         }
         if self.options.layout.empty_workspace_above_first && idx == 0 {
@@ -1036,7 +1053,14 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn move_to_workspace_down(&mut self, focus: bool) {
         let source_workspace_idx = self.active_workspace_idx;
 
-        let new_idx = min(source_workspace_idx + 1, self.workspaces.len() - 1);
+        // The workspace below is the next visible one; hidden workspaces sit
+        // past the end of the visible region.
+        let visible_end = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap_or(self.workspaces.len());
+        let new_idx = min(source_workspace_idx + 1, visible_end - 1);
         if new_idx == source_workspace_idx {
             return;
         }
@@ -1118,7 +1142,8 @@ impl<W: LayoutElement> Monitor<W> {
             removed.width,
             removed.is_full_width,
             removed.is_floating,
-            false,
+            // Focusing the destination means it must not stay hidden.
+            activate,
         );
 
         if self.workspace_switch.is_none() {
@@ -1150,7 +1175,14 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn move_column_to_workspace_down(&mut self, activate: bool) {
         let source_workspace_idx = self.active_workspace_idx;
 
-        let new_idx = min(source_workspace_idx + 1, self.workspaces.len() - 1);
+        // The workspace below is the next visible one; hidden workspaces sit
+        // past the end of the visible region.
+        let visible_end = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap_or(self.workspaces.len());
+        let new_idx = min(source_workspace_idx + 1, visible_end - 1);
         if new_idx == source_workspace_idx {
             return;
         }

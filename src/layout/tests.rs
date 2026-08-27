@@ -2458,6 +2458,112 @@ fn output_disconnect_preserves_hidden_blocks() {
 }
 
 #[test]
+fn hiding_the_last_visible_workspace_is_refused() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    // ["ws1"(win1), empty]; hiding "ws1" leaves ["-", "ws1"(hidden)].
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let visible_end = monitor.workspaces.iter().position(|ws| ws.hidden).unwrap();
+    assert_eq!(visible_end, 1);
+    // Name the remaining visible workspace so it is hideable in principle,
+    // then try to hide it: the visible region must not be left empty.
+    monitor.workspaces[0].name = Some("ws2".to_string());
+    monitor.hide_workspace_by_idx(0);
+
+    assert!(
+        !monitor.workspaces[0].hidden,
+        "the last visible workspace must not be hidden"
+    );
+    assert_eq!(
+        monitor.workspaces.iter().filter(|ws| ws.hidden).count(),
+        1,
+        "no new hidden workspace may appear"
+    );
+}
+
+#[test]
+fn move_column_to_hidden_workspace_then_move_workspace_down() {
+    // Found by proptest: moving a column into a hidden workspace and focusing
+    // it must unhide it first, otherwise the hidden workspace becomes active
+    // and the following workspace move swaps it out of the hidden block.
+    check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FocusWorkspace(1),
+        Op::SetWorkspaceName {
+            new_ws_name: 2,
+            ws_name: None,
+        },
+        Op::ToggleWorkspaceVisibility(2),
+        Op::MoveColumnToWorkspace(2, true),
+        Op::MoveWorkspaceDown,
+    ]);
+}
+
+#[test]
+fn move_window_to_hidden_workspace_without_focus_keeps_it_hidden() {
+    // Sending a window to a hidden workspace without focusing it must leave
+    // the workspace hidden (the scratchpad flow).
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    let hidden_idx = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => monitors[0]
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap(),
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    Op::MoveColumnToWorkspace(hidden_idx, false).apply(&mut layout);
+    layout.verify_invariants();
+
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let ws = monitor
+        .workspaces
+        .iter()
+        .find(|ws| ws.name.as_deref() == Some("ws1"))
+        .unwrap();
+    assert!(ws.hidden, "workspace must stay hidden when not focusing it");
+    assert!(ws.has_window(&2), "the window must have moved there");
+}
+
+#[test]
 fn moving_last_visible_workspace_away_keeps_visible_region() {
     // Found by proptest: moving the only visible workspace (the empty guard)
     // to another output must leave a visible workspace behind, not a bare
