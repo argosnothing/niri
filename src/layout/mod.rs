@@ -747,7 +747,11 @@ impl<W: LayoutElement> Layout<W> {
                 return;
             };
             monitor.unhide_workspace_by_id(ws.id(), false);
-            monitor.clean_up_workspaces();
+            // unhide_workspace_by_id clears the workspace switch when it moves
+            // the workspace, but it can also return early without doing so.
+            if monitor.workspace_switch.is_none() {
+                monitor.clean_up_workspaces();
+            }
         } else {
             monitor.hide_workspace_by_idx(ws_idx);
         }
@@ -809,9 +813,14 @@ impl<W: LayoutElement> Layout<W> {
                 // both will be empty and one of them needs to be removed. clean_up_workspaces
                 // takes care of this.
 
+                // A hidden block makes the two-workspace state reachable as
+                // [empty, hidden-named], which can coexist with a workspace
+                // switch in progress; clean_up_workspaces requires there to be
+                // none.
                 if stopped_primary_ws_switch
                     || (primary.options.layout.empty_workspace_above_first
-                        && primary.workspaces.len() == 2)
+                        && primary.workspaces.len() == 2
+                        && primary.workspace_switch.is_none())
                 {
                     primary.clean_up_workspaces();
                 }

@@ -496,8 +496,18 @@ impl<W: LayoutElement> Monitor<W> {
                     return;
                 }
 
-                // remove hidden if the previous active workspace was forced unhidden
+                // Remove hidden if the previous active workspace was forced
+                // unhidden. This moves that workspace to the hidden block and
+                // can clean up empty workspaces, so the target index has to be
+                // resolved again afterwards.
+                let target_id = self.workspaces[idx].id();
                 self.hide_needs_hidden(prev_active_idx);
+                let idx = self
+                    .workspaces
+                    .iter()
+                    .position(|ws| ws.id() == target_id)
+                    .unwrap_or_else(|| self.active_workspace_idx.min(self.workspaces.len() - 1));
+                self.active_workspace_idx = idx;
 
                 self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
                     self.clock.clone(),

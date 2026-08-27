@@ -2458,6 +2458,60 @@ fn output_disconnect_preserves_hidden_blocks() {
 }
 
 #[test]
+fn re_hiding_on_switch_away_keeps_the_switch_target_valid() {
+    // Found by proptest: switching away from a force-unhidden workspace
+    // re-hides it, which shifts the workspace vec; the switch animation must
+    // target where the destination ended up, not its pre-hide index.
+    check_ops([
+        Op::AddNamedWorkspace {
+            ws_name: 5,
+            output_name: None,
+            layout_config: None,
+        },
+        Op::AddOutput(1),
+        Op::ToggleWorkspaceVisibility(5),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MoveWindowToWorkspace {
+            window_id: None,
+            workspace_idx: 3,
+        },
+        Op::FocusWorkspaceAutoBackAndForth(3),
+    ]);
+}
+
+#[test]
+fn add_output_during_workspace_switch_gesture() {
+    // Found by proptest: add_output's two-workspace cleanup ran while a
+    // workspace switch gesture was in progress, tripping clean_up_workspaces'
+    // workspace_switch.is_none() assert.
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(4),
+            Op::SetWorkspaceName {
+                new_ws_name: 2,
+                ws_name: None,
+            },
+            Op::ToggleWorkspaceVisibility(2),
+            Op::WorkspaceSwitchGestureBegin {
+                output_idx: 4,
+                is_touchpad: false,
+            },
+            Op::AddOutput(1),
+        ],
+    );
+}
+
+#[test]
 fn hiding_the_last_visible_workspace_is_refused() {
     let ops = [
         Op::AddOutput(1),
