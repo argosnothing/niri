@@ -2146,6 +2146,38 @@ fn workspaces_update_original_output_on_moving_to_same_monitor() {
 }
 
 #[test]
+fn verify_invariants_accepts_hidden_workspaces() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 2,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 3,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+
+    layout.toggle_workspace_visibility("ws3".to_string());
+    layout.verify_invariants();
+    layout.toggle_workspace_visibility("ws2".to_string());
+    layout.verify_invariants();
+}
+
+#[test]
 fn large_negative_height_change() {
     let ops = [
         Op::AddOutput(1),
