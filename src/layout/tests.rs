@@ -2458,6 +2458,34 @@ fn output_disconnect_preserves_hidden_blocks() {
 }
 
 #[test]
+fn move_window_to_output_targeting_hidden_workspace() {
+    // Found by proptest: an explicit target workspace index that lands in the
+    // hidden block must not break hidden contiguity.
+    check_ops([
+        Op::AddScaledOutput {
+            id: 2,
+            scale: 1.0,
+            layout_config: None,
+        },
+        Op::AddNamedWorkspace {
+            ws_name: 2,
+            output_name: None,
+            layout_config: None,
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::ToggleWorkspaceVisibility(2),
+        Op::MoveWindowToOutput {
+            window_id: None,
+            output_id: 2,
+            target_ws_idx: Some(2),
+        },
+        Op::MoveWorkspaceDown,
+    ]);
+}
+
+#[test]
 fn re_hiding_on_switch_away_keeps_the_switch_target_valid() {
     // Found by proptest: switching away from a force-unhidden workspace
     // re-hides it, which shifts the workspace vec; the switch animation must
