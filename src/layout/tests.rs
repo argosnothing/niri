@@ -2511,6 +2511,43 @@ fn move_workspace_to_idx_stays_in_visible_region() {
 }
 
 #[test]
+fn unname_hidden_workspace_without_outputs_leaves_it_reachable() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    Op::RemoveOutput(1).apply(&mut layout);
+    layout.verify_invariants();
+
+    // Unname while no outputs are connected.
+    layout.unname_workspace("ws1");
+    layout.verify_invariants();
+
+    // When the output returns, the workspace must be visible (an unnamed
+    // hidden workspace would be unreachable forever).
+    Op::AddOutput(1).apply(&mut layout);
+    layout.verify_invariants();
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let ws = monitor
+        .workspaces
+        .iter()
+        .find(|ws| ws.has_window(&1))
+        .unwrap();
+    assert!(!ws.hidden);
+}
+
+#[test]
 fn large_negative_height_change() {
     let ops = [
         Op::AddOutput(1),
