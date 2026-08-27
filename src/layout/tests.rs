@@ -2454,6 +2454,63 @@ fn output_disconnect_preserves_hidden_blocks() {
 }
 
 #[test]
+fn move_workspace_down_stops_at_hidden_block() {
+    // Moving the active workspace down must not swap it into the hidden block.
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddNamedWorkspace {
+            ws_name: 1,
+            output_name: None,
+            layout_config: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+    Op::MoveWorkspaceDown.apply(&mut layout);
+    layout.verify_invariants();
+}
+
+#[test]
+fn move_workspace_to_idx_stays_in_visible_region() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let hidden_idx = monitor.workspaces.iter().position(|ws| ws.hidden).unwrap();
+
+    // Moving a hidden workspace is a no-op.
+    monitor.move_workspace_to_idx(hidden_idx, 0);
+    layout.verify_invariants();
+
+    // Moving a visible workspace to a huge index clamps to the visible region.
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    monitor.move_workspace_to_idx(0, 100);
+    layout.verify_invariants();
+}
+
+#[test]
 fn large_negative_height_change() {
     let ops = [
         Op::AddOutput(1),
