@@ -557,6 +557,7 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         ws_name: Option<usize>,
     },
+    ToggleWorkspaceVisibility(#[proptest(strategy = "1..=5usize")] usize),
     MoveWindowToOutput {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         window_id: Option<usize>,
@@ -893,6 +894,9 @@ impl Op {
                 let ws_ref =
                     ws_name.map(|ws_name| WorkspaceReference::Name(format!("ws{ws_name}")));
                 layout.unset_workspace_name(ws_ref);
+            }
+            Op::ToggleWorkspaceVisibility(ws_name) => {
+                layout.toggle_workspace_visibility(format!("ws{ws_name}"));
             }
             Op::AddWindow { mut params } => {
                 if layout.has_window(&params.id) {
@@ -2456,19 +2460,16 @@ fn output_disconnect_preserves_hidden_blocks() {
 #[test]
 fn move_workspace_down_stops_at_hidden_block() {
     // Moving the active workspace down must not swap it into the hidden block.
-    let ops = [
+    check_ops([
         Op::AddOutput(1),
         Op::AddNamedWorkspace {
             ws_name: 1,
             output_name: None,
             layout_config: None,
         },
-    ];
-    let mut layout = check_ops(ops);
-    layout.toggle_workspace_visibility("ws1".to_string());
-    layout.verify_invariants();
-    Op::MoveWorkspaceDown.apply(&mut layout);
-    layout.verify_invariants();
+        Op::ToggleWorkspaceVisibility(1),
+        Op::MoveWorkspaceDown,
+    ]);
 }
 
 #[test]
