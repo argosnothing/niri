@@ -1818,7 +1818,9 @@ impl<W: LayoutElement> Monitor<W> {
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter_mut(), geo)
             // Cull out workspaces outside the output.
-            .filter(move |(ws, geo)| !ws.hidden && !cull || geo.intersection(output_geo).is_some())
+            .filter(move |(ws, geo)| {
+                !ws.hidden && (!cull || geo.intersection(output_geo).is_some())
+            })
     }
 
     pub fn workspace_under(

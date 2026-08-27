@@ -2604,6 +2604,38 @@ fn naming_workspace_on_non_active_monitor_compensates_there() {
 }
 
 #[test]
+fn hidden_workspaces_are_not_rendered() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+
+    // In the overview the workspace strip is zoomed out, so the hidden
+    // workspace's geometry intersects the output; it still must not render.
+    Op::ToggleOverview.apply(&mut layout);
+    Op::AdvanceAnimations { msec_delta: 1000 }.apply(&mut layout);
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    assert!(monitor
+        .workspaces_with_render_geo_mut(false)
+        .all(|(ws, _)| !ws.hidden));
+    assert!(monitor
+        .workspaces_with_render_geo_mut(true)
+        .all(|(ws, _)| !ws.hidden));
+}
+
+#[test]
 fn large_negative_height_change() {
     let ops = [
         Op::AddOutput(1),
