@@ -445,7 +445,13 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn add_workspace_bottom(&mut self) {
-        self.add_workspace_at(self.workspaces.len());
+        // The bottom of the visible region; hidden workspaces stay past it.
+        let visible_end = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap_or(self.workspaces.len());
+        self.add_workspace_at(visible_end);
     }
 
     pub fn activate_workspace(&mut self, idx: usize) {
@@ -859,11 +865,32 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn insert_workspace(&mut self, mut ws: Workspace<W>, mut idx: usize, activate: bool) {
+        // A hidden workspace never belongs in the visible region (this happens
+        // when moving a hidden workspace to another output). Route it to the
+        // hidden block; it stays named, so it remains reachable.
+        if ws.hidden {
+            self.insert_hidden_workspace(ws);
+            return;
+        }
+
         ws.set_output(Some(self.output.clone()));
         ws.update_config(self.options.clone());
 
-        // Don't insert past the last empty workspace.
-        if idx == self.workspaces.len() {
+        // Hidden workspaces must stay contiguous at the end of the vec: never
+        // insert a visible workspace into or past that block. The visible
+        // region ends at the first hidden workspace, or at the vec end if
+        // there is none.
+        let visible_end = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap_or(self.workspaces.len());
+        idx = idx.min(visible_end);
+
+        // Don't insert past the last empty workspace: the trailing empty when
+        // there is no hidden block, or the empty workspace guarding the hidden
+        // block.
+        if idx == visible_end && idx > 0 {
             idx -= 1;
         }
         if idx == 0 && self.options.layout.empty_workspace_above_first {
