@@ -2548,6 +2548,62 @@ fn unname_hidden_workspace_without_outputs_leaves_it_reachable() {
 }
 
 #[test]
+fn naming_last_visible_workspace_restores_empty_guard() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    // Name the empty guard workspace (the last visible one, sitting before the
+    // hidden block). A new empty workspace must be added after it.
+    let wsid = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => {
+            let visible_end = monitors[0]
+                .workspaces
+                .iter()
+                .position(|ws| ws.hidden)
+                .unwrap();
+            monitors[0].workspaces[visible_end - 1].id()
+        }
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    layout.set_workspace_name("ws2".to_string(), Some(WorkspaceReference::Id(wsid.get())));
+    layout.verify_invariants();
+}
+
+#[test]
+fn naming_workspace_on_non_active_monitor_compensates_there() {
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ops = [Op::AddOutput(1), Op::AddOutput(2)];
+    // Focus stays on output 1 (the active monitor).
+    let mut layout = check_ops_with_options(options, ops);
+
+    // Name the FIRST workspace of the non-active monitor by id. The compensating
+    // empty workspace must be added on that monitor, not the active one.
+    let wsid = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => monitors[1].workspaces[0].id(),
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    layout.set_workspace_name("ws1".to_string(), Some(WorkspaceReference::Id(wsid.get())));
+    layout.verify_invariants();
+}
+
+#[test]
 fn large_negative_height_change() {
     let ops = [
         Op::AddOutput(1),
