@@ -318,18 +318,12 @@ impl<W: LayoutElement> Monitor<W> {
             }
         }
 
-        // Hidden workspaces should always be at the end
+        // Hidden workspaces should always be at the end.
         let mut hidden_workspaces = Vec::new();
         let mut i = 0;
         while i < workspaces.len() {
             if workspaces[i].hidden {
-                let mut ws = workspaces.remove(i);
-                // hidden workspaces want to go to where they were beofore
-                if ws.original_idx.is_none() {
-                    ws.original_idx = Some(i);
-                }
-                // simply push the workspace to the end of the vec as it will
-                // start as hidden
+                let ws = workspaces.remove(i);
                 hidden_workspaces.push(ws);
                 if i < active_workspace_idx {
                     active_workspace_idx = active_workspace_idx.saturating_sub(1);
@@ -736,6 +730,10 @@ impl<W: LayoutElement> Monitor<W> {
         let Some(ws) = self.workspaces.iter_mut().find(|ws| ws.id() == id) else {
             return false;
         };
+        // Unnaming removes the only way to unhide this workspace later, so it
+        // must not be left pending a hide-on-switch-away (the unhide call above
+        // only clears this when the workspace was actually hidden).
+        ws.needs_hidden = false;
         ws.unname();
 
         if self.workspace_switch.is_none() {
@@ -746,30 +744,28 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn unhide_workspace_by_id(&mut self, id: WorkspaceId, needs_hidden: bool) -> Option<usize> {
-        let name = self
-            .workspaces
-            .iter()
-            .find(|ws| ws.id() == id)
-            .and_then(|ws| ws.name.clone());
+        let idx = self.workspaces.iter().position(|ws| ws.id() == id)?;
 
-        let Some(name) = name else {
+        // Nothing to do if the workspace isn't actually hidden. Avoid the
+        // remove/reinsert work below, which resets workspace_switch and
+        // reorders the workspace vec even though nothing needs to move.
+        if !self.workspaces[idx].hidden {
             return None;
-        };
+        }
 
-        let Some(idx) = self.find_named_workspace_index(&name) else {
-            return None;
-        };
-
-        // Hidden workspaces are positioned physically after visible workspaces in their
-        // workspace vec, because of this on unhide we need to position them to match
-        // where they were originally on unhide.
-        let original_idx = self.workspaces[idx].original_idx.unwrap_or(idx);
         let mut ws = self.remove_workspace_by_idx(idx);
         ws.hidden = false;
         ws.needs_hidden = needs_hidden;
-        ws.original_idx = None;
-        self.insert_workspace(ws, original_idx, false);
-        return Some(original_idx);
+
+        // Unhidden workspaces go to the end of the visible region, right
+        // before the trailing empty workspace.
+        let visible_end = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap_or(self.workspaces.len());
+        self.insert_workspace(ws, visible_end.saturating_sub(1), false);
+        self.workspaces.iter().position(|ws| ws.id() == id)
     }
 
     pub fn hide_workspace_by_name(&mut self, name: &str) {
@@ -805,9 +801,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.workspaces[idx].hidden = true;
         self.workspaces[idx].needs_hidden = false;
-        let mut ws = self.remove_workspace_by_idx(idx);
-        ws.original_idx = Some(idx);
-        self.workspaces.insert(self.workspaces.len(), ws);
+        let ws = self.remove_workspace_by_idx(idx);
+        self.workspaces.push(ws);
         self.ensure_empty_before_hidden();
     }
 
@@ -843,26 +838,18 @@ impl<W: LayoutElement> Monitor<W> {
         ws
     }
 
-    // Hidden workspaces always want to be at then end of the vec, even
-    // when they are newly added. Their original idx should instead be set to
-    // where they would have gone if they were not hidden so when we toggle visibility
-    // they appear in an intuitive spot.
-    pub fn insert_hidden_workspace(&mut self, mut ws: Workspace<W>, mut idx: usize) {
+    // Hidden workspaces always live at the end of the vec, even when newly
+    // added. On unhide they go to the end of the visible region.
+    pub fn insert_hidden_workspace(&mut self, mut ws: Workspace<W>) {
         ws.set_output(Some(self.output.clone()));
         ws.update_config(self.options.clone());
 
-        if idx == self.workspaces.len() {
-            idx -= 1;
-        }
-        if idx == 0 && self.options.layout.empty_workspace_above_first {
-            idx += 1;
-        }
-        ws.original_idx = Some(idx);
-
-        let idx = self.workspaces.len();
-        self.workspaces.insert(idx, ws);
+        self.workspaces.push(ws);
         self.workspace_switch = None;
         self.clean_up_workspaces();
+        // The monitor may not have had a hidden block before this insert; make
+        // sure the block ends up guarded by an empty workspace.
+        self.ensure_empty_before_hidden();
     }
 
     pub fn insert_workspace(&mut self, mut ws: Workspace<W>, mut idx: usize, activate: bool) {

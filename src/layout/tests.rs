@@ -2175,6 +2175,86 @@ fn verify_invariants_accepts_hidden_workspaces() {
     layout.verify_invariants();
     layout.toggle_workspace_visibility("ws2".to_string());
     layout.verify_invariants();
+    layout.toggle_workspace_visibility("ws3".to_string());
+    layout.verify_invariants();
+}
+
+#[test]
+fn unhide_goes_to_end_of_visible_region() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+    ];
+    // ["ws1"(win1), win2, win3, empty]
+    let mut layout = check_ops(ops);
+
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    // The unhidden workspace lands at the end of the visible region, right
+    // before the trailing empty: [win2, win3, "ws1"(win1), empty].
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let pos_ws1 = monitor
+        .workspaces
+        .iter()
+        .position(|ws| ws.name.as_deref() == Some("ws1"))
+        .unwrap();
+    assert_eq!(pos_ws1, monitor.workspaces.len() - 2);
+}
+
+#[test]
+fn unname_focused_visible_workspace_keeps_focus() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWorkspaceUp,
+    ];
+    // ["ws1"(win1), win2, empty], focus back on "ws1".
+    let mut layout = check_ops(ops);
+
+    layout.unname_workspace("ws1");
+    layout.verify_invariants();
+
+    // Unnaming a visible workspace must not reorder or refocus anything.
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    assert!(monitor.workspaces[0].has_window(&1));
+    assert!(monitor.workspaces[1].has_window(&2));
+    assert_eq!(
+        monitor.active_workspace_idx, 0,
+        "focus must stay on the unnamed workspace"
+    );
 }
 
 #[test]
