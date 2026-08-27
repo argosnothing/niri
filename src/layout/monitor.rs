@@ -819,8 +819,15 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn remove_workspace_by_idx(&mut self, mut idx: usize) -> Workspace<W> {
-        // Don't add a new workspace if we're removing a hidden one
-        if idx == self.workspaces.len() - 1 && !self.workspaces[idx].hidden {
+        // When removing the last visible workspace, add a new empty one first to
+        // keep the visible region non-empty. Removing a hidden workspace doesn't
+        // need a replacement.
+        let visible_end = self
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap_or(self.workspaces.len());
+        if !self.workspaces[idx].hidden && idx + 1 == visible_end {
             self.add_workspace_bottom();
         }
         if self.options.layout.empty_workspace_above_first && idx == 0 {

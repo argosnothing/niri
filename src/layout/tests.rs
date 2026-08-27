@@ -2458,6 +2458,24 @@ fn output_disconnect_preserves_hidden_blocks() {
 }
 
 #[test]
+fn moving_last_visible_workspace_away_keeps_visible_region() {
+    // Found by proptest: moving the only visible workspace (the empty guard)
+    // to another output must leave a visible workspace behind, not a bare
+    // hidden block.
+    check_ops([
+        Op::AddOutput(1),
+        Op::AddNamedWorkspace {
+            ws_name: 1,
+            output_name: None,
+            layout_config: None,
+        },
+        Op::ToggleWorkspaceVisibility(1),
+        Op::AddOutput(2),
+        Op::MoveWorkspaceToOutput(2),
+    ]);
+}
+
+#[test]
 fn move_workspace_down_stops_at_hidden_block() {
     // Moving the active workspace down must not swap it into the hidden block.
     check_ops([
