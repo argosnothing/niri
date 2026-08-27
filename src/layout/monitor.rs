@@ -795,12 +795,14 @@ impl<W: LayoutElement> Monitor<W> {
         true
     }
 
-    pub fn hide_workspace_by_idx(&mut self, idx: usize) {
+    pub fn hide_workspace_by_idx(&mut self, mut idx: usize) {
         if idx == self.workspaces.len() - 1 {
             return;
         }
         if self.options.layout.empty_workspace_above_first && idx == 0 {
+            // The new empty workspace on top shifts the target down by one.
             self.add_workspace_top();
+            idx += 1;
         }
 
         self.workspaces[idx].hidden = true;

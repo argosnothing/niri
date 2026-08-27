@@ -2324,6 +2324,38 @@ fn close_window_in_hidden_workspace_with_empty_workspace_above_first() {
 }
 
 #[test]
+fn hide_workspace_at_index_zero_hides_the_right_workspace() {
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ];
+    let mut layout = check_ops_with_options(options, ops);
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    // Manufacture a named workspace at idx 0.
+    monitor.workspaces[0].name = Some("ws1".to_string());
+
+    monitor.hide_workspace_by_idx(0);
+
+    // The named workspace must be the hidden one — not the freshly added empty.
+    let hidden: Vec<_> = monitor.workspaces.iter().filter(|ws| ws.hidden).collect();
+    assert_eq!(hidden.len(), 1);
+    assert_eq!(hidden[0].name.as_deref(), Some("ws1"));
+}
+
+#[test]
 fn large_negative_height_change() {
     let ops = [
         Op::AddOutput(1),
