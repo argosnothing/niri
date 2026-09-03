@@ -557,6 +557,7 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         ws_name: Option<usize>,
     },
+    ToggleWorkspaceVisibility(#[proptest(strategy = "1..=5usize")] usize),
     MoveWindowToOutput {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         window_id: Option<usize>,
@@ -893,6 +894,9 @@ impl Op {
                 let ws_ref =
                     ws_name.map(|ws_name| WorkspaceReference::Name(format!("ws{ws_name}")));
                 layout.unset_workspace_name(ws_ref);
+            }
+            Op::ToggleWorkspaceVisibility(ws_name) => {
+                layout.toggle_workspace_visibility(format!("ws{ws_name}"));
             }
             Op::AddWindow { mut params } => {
                 if layout.has_window(&params.id) {
@@ -2143,6 +2147,699 @@ fn workspaces_update_original_output_on_moving_to_same_monitor() {
     assert!(ws.name().is_some()); // Sanity check.
     let mon = mon.unwrap();
     assert_eq!(mon.output_name(), "output2");
+}
+
+#[test]
+fn verify_invariants_accepts_hidden_workspaces() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 2,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 3,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+
+    layout.toggle_workspace_visibility("ws3".to_string());
+    layout.verify_invariants();
+    layout.toggle_workspace_visibility("ws2".to_string());
+    layout.verify_invariants();
+    layout.toggle_workspace_visibility("ws3".to_string());
+    layout.verify_invariants();
+}
+
+#[test]
+fn unhide_goes_to_end_of_visible_region() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+    ];
+    // ["ws1"(win1), win2, win3, empty]
+    let mut layout = check_ops(ops);
+
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    // The unhidden workspace lands at the end of the visible region, right
+    // before the trailing empty: [win2, win3, "ws1"(win1), empty].
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let pos_ws1 = monitor
+        .workspaces
+        .iter()
+        .position(|ws| ws.name.as_deref() == Some("ws1"))
+        .unwrap();
+    assert_eq!(pos_ws1, monitor.workspaces.len() - 2);
+}
+
+#[test]
+fn unname_focused_visible_workspace_keeps_focus() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::FocusWorkspaceUp,
+    ];
+    // ["ws1"(win1), win2, empty], focus back on "ws1".
+    let mut layout = check_ops(ops);
+
+    layout.unname_workspace("ws1");
+    layout.verify_invariants();
+
+    // Unnaming a visible workspace must not reorder or refocus anything.
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    assert!(monitor.workspaces[0].has_window(&1));
+    assert!(monitor.workspaces[1].has_window(&2));
+    assert_eq!(
+        monitor.active_workspace_idx, 0,
+        "focus must stay on the unnamed workspace"
+    );
+}
+
+#[test]
+fn clean_up_workspaces_skips_two_workspace_collapse_with_hidden() {
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    // [emptyTop, "ws1"(win1), empty]
+    let mut layout = check_ops_with_options(options, ops);
+
+    // Hiding "ws1" leaves [emptyTop, "ws1"(hidden)].
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    // A later cleanup (e.g. after a workspace-switch gesture ends) must not
+    // assert on the legal [empty, hidden-named] state.
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    monitor.clean_up_workspaces();
+    layout.verify_invariants();
+}
+
+#[test]
+fn close_window_in_hidden_workspace_with_empty_workspace_above_first() {
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops_with_options(options, ops);
+
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    // Closing the hidden workspace's window reaches remove_window's own
+    // two-workspace collapse; it must not assert on [empty, hidden-named].
+    Op::CloseWindow(1).apply(&mut layout);
+    layout.verify_invariants();
+}
+
+#[test]
+fn hide_workspace_at_index_zero_hides_the_right_workspace() {
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+    ];
+    let mut layout = check_ops_with_options(options, ops);
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    // Manufacture a named workspace at idx 0.
+    monitor.workspaces[0].name = Some("ws1".to_string());
+
+    monitor.hide_workspace_by_idx(0);
+
+    // The named workspace must be the hidden one — not the freshly added empty.
+    let hidden: Vec<_> = monitor.workspaces.iter().filter(|ws| ws.hidden).collect();
+    assert_eq!(hidden.len(), 1);
+    assert_eq!(hidden[0].name.as_deref(), Some("ws1"));
+}
+
+#[test]
+fn move_hidden_workspace_to_other_output_keeps_it_hidden() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    // Move the hidden workspace to output 2.
+    let (old_idx, old_output, new_output) = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => {
+            let old_idx = monitors[0]
+                .workspaces
+                .iter()
+                .position(|ws| ws.name.as_deref() == Some("ws1"))
+                .unwrap();
+            (
+                old_idx,
+                monitors[0].output.clone(),
+                monitors[1].output.clone(),
+            )
+        }
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    layout.move_workspace_to_output_by_id(old_idx, Some(old_output), &new_output);
+    layout.verify_invariants();
+
+    // The workspace lives on monitor 1 now, still hidden, still reachable by name.
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[1],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let ws = monitor
+        .workspaces
+        .iter()
+        .find(|ws| ws.name.as_deref() == Some("ws1"))
+        .expect("moved workspace must be on the target monitor");
+    assert!(ws.hidden, "moved workspace must stay hidden");
+
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+}
+
+#[test]
+fn output_disconnect_preserves_hidden_blocks() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        // Window + named workspace on output 1 (primary).
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        // Window + named workspace on output 2.
+        Op::FocusOutput(2),
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 2,
+            ws_name: None,
+        },
+        // A visible workspace on output 2 too, so the incoming set mixes
+        // visible and hidden workspaces.
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(3),
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.toggle_workspace_visibility("ws2".to_string());
+    layout.verify_invariants();
+
+    // Disconnect output 2; its workspaces (incl. the hidden one) land on output 1.
+    Op::RemoveOutput(2).apply(&mut layout);
+    layout.verify_invariants();
+
+    // Both hidden workspaces must be reachable again.
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+    layout.toggle_workspace_visibility("ws2".to_string());
+    layout.verify_invariants();
+}
+
+#[test]
+fn move_window_to_output_targeting_hidden_workspace() {
+    // Found by proptest: an explicit target workspace index that lands in the
+    // hidden block must not break hidden contiguity.
+    check_ops([
+        Op::AddScaledOutput {
+            id: 2,
+            scale: 1.0,
+            layout_config: None,
+        },
+        Op::AddNamedWorkspace {
+            ws_name: 2,
+            output_name: None,
+            layout_config: None,
+        },
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::ToggleWorkspaceVisibility(2),
+        Op::MoveWindowToOutput {
+            window_id: None,
+            output_id: 2,
+            target_ws_idx: Some(2),
+        },
+        Op::MoveWorkspaceDown,
+    ]);
+}
+
+#[test]
+fn re_hiding_on_switch_away_keeps_the_switch_target_valid() {
+    // Found by proptest: switching away from a force-unhidden workspace
+    // re-hides it, which shifts the workspace vec; the switch animation must
+    // target where the destination ended up, not its pre-hide index.
+    check_ops([
+        Op::AddNamedWorkspace {
+            ws_name: 5,
+            output_name: None,
+            layout_config: None,
+        },
+        Op::AddOutput(1),
+        Op::ToggleWorkspaceVisibility(5),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::MoveWindowToWorkspace {
+            window_id: None,
+            workspace_idx: 3,
+        },
+        Op::FocusWorkspaceAutoBackAndForth(3),
+    ]);
+}
+
+#[test]
+fn add_output_during_workspace_switch_gesture() {
+    // Found by proptest: add_output's two-workspace cleanup ran while a
+    // workspace switch gesture was in progress, tripping clean_up_workspaces'
+    // workspace_switch.is_none() assert.
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(4),
+            Op::SetWorkspaceName {
+                new_ws_name: 2,
+                ws_name: None,
+            },
+            Op::ToggleWorkspaceVisibility(2),
+            Op::WorkspaceSwitchGestureBegin {
+                output_idx: 4,
+                is_touchpad: false,
+            },
+            Op::AddOutput(1),
+        ],
+    );
+}
+
+#[test]
+fn hiding_the_last_visible_workspace_is_refused() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    // ["ws1"(win1), empty]; hiding "ws1" leaves ["-", "ws1"(hidden)].
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let visible_end = monitor.workspaces.iter().position(|ws| ws.hidden).unwrap();
+    assert_eq!(visible_end, 1);
+    // Name the remaining visible workspace so it is hideable in principle,
+    // then try to hide it: the visible region must not be left empty.
+    monitor.workspaces[0].name = Some("ws2".to_string());
+    monitor.hide_workspace_by_idx(0);
+
+    assert!(
+        !monitor.workspaces[0].hidden,
+        "the last visible workspace must not be hidden"
+    );
+    assert_eq!(
+        monitor.workspaces.iter().filter(|ws| ws.hidden).count(),
+        1,
+        "no new hidden workspace may appear"
+    );
+}
+
+#[test]
+fn move_column_to_hidden_workspace_then_move_workspace_down() {
+    // Found by proptest: moving a column into a hidden workspace and focusing
+    // it must unhide it first, otherwise the hidden workspace becomes active
+    // and the following workspace move swaps it out of the hidden block.
+    check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::FocusWorkspace(1),
+        Op::SetWorkspaceName {
+            new_ws_name: 2,
+            ws_name: None,
+        },
+        Op::ToggleWorkspaceVisibility(2),
+        Op::MoveColumnToWorkspace(2, true),
+        Op::MoveWorkspaceDown,
+    ]);
+}
+
+#[test]
+fn move_window_to_hidden_workspace_without_focus_keeps_it_hidden() {
+    // Sending a window to a hidden workspace without focusing it must leave
+    // the workspace hidden (the scratchpad flow).
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    let hidden_idx = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => monitors[0]
+            .workspaces
+            .iter()
+            .position(|ws| ws.hidden)
+            .unwrap(),
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    Op::MoveColumnToWorkspace(hidden_idx, false).apply(&mut layout);
+    layout.verify_invariants();
+
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let ws = monitor
+        .workspaces
+        .iter()
+        .find(|ws| ws.name.as_deref() == Some("ws1"))
+        .unwrap();
+    assert!(ws.hidden, "workspace must stay hidden when not focusing it");
+    assert!(ws.has_window(&2), "the window must have moved there");
+}
+
+#[test]
+fn moving_last_visible_workspace_away_keeps_visible_region() {
+    // Found by proptest: moving the only visible workspace (the empty guard)
+    // to another output must leave a visible workspace behind, not a bare
+    // hidden block.
+    check_ops([
+        Op::AddOutput(1),
+        Op::AddNamedWorkspace {
+            ws_name: 1,
+            output_name: None,
+            layout_config: None,
+        },
+        Op::ToggleWorkspaceVisibility(1),
+        Op::AddOutput(2),
+        Op::MoveWorkspaceToOutput(2),
+    ]);
+}
+
+#[test]
+fn move_workspace_down_stops_at_hidden_block() {
+    // Moving the active workspace down must not swap it into the hidden block.
+    check_ops([
+        Op::AddOutput(1),
+        Op::AddNamedWorkspace {
+            ws_name: 1,
+            output_name: None,
+            layout_config: None,
+        },
+        Op::ToggleWorkspaceVisibility(1),
+        Op::MoveWorkspaceDown,
+    ]);
+}
+
+#[test]
+fn move_workspace_to_idx_stays_in_visible_region() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+        Op::FocusWorkspaceDown,
+        Op::AddWindow {
+            params: TestWindowParams::new(2),
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let hidden_idx = monitor.workspaces.iter().position(|ws| ws.hidden).unwrap();
+
+    // Moving a hidden workspace is a no-op.
+    monitor.move_workspace_to_idx(hidden_idx, 0);
+    layout.verify_invariants();
+
+    // Moving a visible workspace to a huge index clamps to the visible region.
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    monitor.move_workspace_to_idx(0, 100);
+    layout.verify_invariants();
+}
+
+#[test]
+fn unname_hidden_workspace_without_outputs_leaves_it_reachable() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    Op::RemoveOutput(1).apply(&mut layout);
+    layout.verify_invariants();
+
+    // Unname while no outputs are connected.
+    layout.unname_workspace("ws1");
+    layout.verify_invariants();
+
+    // When the output returns, the workspace must be visible (an unnamed
+    // hidden workspace would be unreachable forever).
+    Op::AddOutput(1).apply(&mut layout);
+    layout.verify_invariants();
+    let monitor = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    let ws = monitor
+        .workspaces
+        .iter()
+        .find(|ws| ws.has_window(&1))
+        .unwrap();
+    assert!(!ws.hidden);
+}
+
+#[test]
+fn naming_last_visible_workspace_restores_empty_guard() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+    layout.verify_invariants();
+
+    // Name the empty guard workspace (the last visible one, sitting before the
+    // hidden block). A new empty workspace must be added after it.
+    let wsid = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => {
+            let visible_end = monitors[0]
+                .workspaces
+                .iter()
+                .position(|ws| ws.hidden)
+                .unwrap();
+            monitors[0].workspaces[visible_end - 1].id()
+        }
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    layout.set_workspace_name("ws2".to_string(), Some(WorkspaceReference::Id(wsid.get())));
+    layout.verify_invariants();
+}
+
+#[test]
+fn naming_workspace_on_non_active_monitor_compensates_there() {
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let ops = [Op::AddOutput(1), Op::AddOutput(2)];
+    // Focus stays on output 1 (the active monitor).
+    let mut layout = check_ops_with_options(options, ops);
+
+    // Name the FIRST workspace of the non-active monitor by id. The compensating
+    // empty workspace must be added on that monitor, not the active one.
+    let wsid = match &layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => monitors[1].workspaces[0].id(),
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    layout.set_workspace_name("ws1".to_string(), Some(WorkspaceReference::Id(wsid.get())));
+    layout.verify_invariants();
+}
+
+#[test]
+fn hidden_workspaces_are_not_rendered() {
+    let ops = [
+        Op::AddOutput(1),
+        Op::AddWindow {
+            params: TestWindowParams::new(1),
+        },
+        Op::SetWorkspaceName {
+            new_ws_name: 1,
+            ws_name: None,
+        },
+    ];
+    let mut layout = check_ops(ops);
+    layout.toggle_workspace_visibility("ws1".to_string());
+
+    // In the overview the workspace strip is zoomed out, so the hidden
+    // workspace's geometry intersects the output; it still must not render.
+    Op::ToggleOverview.apply(&mut layout);
+    Op::AdvanceAnimations { msec_delta: 1000 }.apply(&mut layout);
+
+    let monitor = match &mut layout.monitor_set {
+        MonitorSet::Normal { monitors, .. } => &mut monitors[0],
+        MonitorSet::NoOutputs { .. } => unreachable!(),
+    };
+    assert!(monitor
+        .workspaces_with_render_geo_mut(false)
+        .all(|(ws, _)| !ws.hidden));
+    assert!(monitor
+        .workspaces_with_render_geo_mut(true)
+        .all(|(ws, _)| !ws.hidden));
 }
 
 #[test]

@@ -112,9 +112,6 @@ pub struct Workspace<W: LayoutElement> {
     /// Unique ID of this workspace.
     id: WorkspaceId,
 
-    /// Hidden workspaces need to track their original idx
-    pub original_idx: Option<usize>,
-
     /// whether we should hide this workspace for indexing
     pub hidden: bool,
 
@@ -280,7 +277,6 @@ impl<W: LayoutElement> Workspace<W> {
             clock,
             base_options,
             options,
-            original_idx: None, // We don't know this yet.
             hidden: is_hidden,
             needs_hidden: false,
             name: config.map(|c| c.name.0),
@@ -351,7 +347,6 @@ impl<W: LayoutElement> Workspace<W> {
             clock,
             base_options,
             options,
-            original_idx: None,
             hidden: is_hidden,
             needs_hidden: false,
             name: config.map(|c| c.name.0),
